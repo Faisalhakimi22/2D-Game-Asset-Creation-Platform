@@ -61,12 +61,12 @@ export class ProjectService {
     }
 
     const snapshot = await query.get();
-    let projects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Project));
+    let projects = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as Project));
 
     // Client-side search (Firestore doesn't support ILIKE)
     if (filters.search) {
       const searchLower = filters.search.toLowerCase();
-      projects = projects.filter(p => 
+      projects = projects.filter((p: Project) => 
         p.title?.toLowerCase().includes(searchLower) ||
         p.description?.toLowerCase().includes(searchLower)
       );

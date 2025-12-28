@@ -199,3 +199,89 @@ All endpoints may return these error responses:
   "message": "Error details (in development mode)"
 }
 ```
+
+
+## Generation Routes (`/api/generate`)
+
+### POST `/api/generate/sprite`
+Generate sprite images using AI (Gemini).
+
+**Headers:**
+- `Authorization: Bearer <firebase_id_token>`
+- `Content-Type: application/json`
+
+**Body:**
+```json
+{
+  "prompt": "string (required) - Description of the sprite to generate",
+  "style": "pixel_art | 2d_flat (default: pixel_art)",
+  "aspectRatio": "2:3 | 1:1 | 9:16 | 4:3 | 3:2 | 16:9 (default: 1:1)",
+  "viewpoint": "front | back | side | top_down | isometric (default: front)",
+  "colors": ["#hex1", "#hex2"] (optional - color palette),
+  "dimensions": "32x32 | 64x64 | 128x128 | 256x256 (default: 64x64)",
+  "quantity": 1-4 (default: 2),
+  "referenceImage": "base64 data URL (optional)",
+  "poseImage": "base64 data URL (optional)",
+  "apiKey": "string (optional - user's own Gemini API key for BYOK)",
+  "saveToCloud": boolean (default: true)
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "images": ["url1", "url2"],
+  "creditsUsed": 5,
+  "remainingCredits": 95
+}
+```
+
+**Error Response (Insufficient Credits):**
+```json
+{
+  "error": "Insufficient credits",
+  "required": 5,
+  "available": 2
+}
+```
+
+### POST `/api/generate/scene`
+Generate scene/background images using AI (Gemini).
+
+**Headers:**
+- `Authorization: Bearer <firebase_id_token>`
+- `Content-Type: application/json`
+
+**Body:**
+```json
+{
+  "prompt": "string (required) - Description of the scene to generate",
+  "style": "pixel_art | 2d_flat (default: pixel_art)",
+  "aspectRatio": "2:3 | 1:1 | 9:16 | 4:3 | 3:2 | 16:9 (default: 16:9)",
+  "viewpoint": "front | side | top_down | isometric (default: side)",
+  "colors": ["#hex1", "#hex2"] (optional - color palette),
+  "quantity": 1-4 (default: 2),
+  "referenceImage": "base64 data URL (optional)",
+  "apiKey": "string (optional - user's own Gemini API key for BYOK)"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "images": ["url1", "url2"],
+  "creditsUsed": 8,
+  "remainingCredits": 92
+}
+```
+
+## Environment Variables Required
+
+Add to `Backend/.env`:
+```
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+Note: Users can also use their own API key (BYOK - Bring Your Own Key) by storing it in localStorage under `replicate_api_key`. When using their own key, no credits are deducted.

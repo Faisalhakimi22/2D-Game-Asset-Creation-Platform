@@ -14,8 +14,20 @@ export function useUserProfile(): UserProfile | null {
     return userProfile;
 }
 
-// Hook for updating credits in real-time
+// Hook for updating credits via API (deducts from backend)
 export function useUpdateCredits() {
     const { updateCredits } = useUserProfileContext();
     return { updateCredits };
+}
+
+// Hook for setting credits locally (when backend already handled deduction)
+export function useSetCreditsLocally() {
+    const { setCreditsLocally } = useUserProfileContext();
+    return { setCreditsLocally };
+}
+
+// Hook for refreshing user profile from server
+export function useRefreshProfile() {
+    const { refreshProfile } = useUserProfileContext();
+    return { refreshProfile };
 }

@@ -2,7 +2,8 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Sparkles, Image as ImageIcon, Film, Layers, Home, FolderOpen, Gamepad2, Trophy, Clock, ChevronDown, User } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { BYOKButton } from "@/components/home/BYOKButton";
@@ -11,6 +12,17 @@ import { useUserProfile } from "@/hooks/useUserProfile";
 import { CreditsDisplay } from "@/components/CreditsDisplay";
 import { AuthGuard } from "@/components/AuthGuard";
 import { Avatar } from "@/components/Avatar";
+
+// Prefetch routes on mount for faster navigation
+function usePrefetchRoutes() {
+    const router = useRouter();
+    useEffect(() => {
+        router.prefetch('/sprites');
+        router.prefetch('/scenes');
+        router.prefetch('/animations');
+        router.prefetch('/projects');
+    }, [router]);
+}
 
 function UserProfileDock() {
     const userProfile = useUserProfile();
@@ -48,26 +60,97 @@ function UserProfileDock() {
     );
 }
 
-// Mock session data
-const recentSessions = {
-    today: [
-        { id: "8842", title: "Cyberpunk Character Set", type: "sprite", time: "2 hours ago", author: "You", images: ["/9a6417c2-8fdb-4d86-ba15-f3df35f58490_removalai_preview.png", "/73e95d25-727c-45b3-bbb5-1187ce8ad231_removalai_preview.png", "/702f4fc5-6f33-4b77-aadc-09c393e7442d_removalai_preview.png"] },
-        { id: "9120", title: "Hero Idle Animation", type: "sprite", time: "5 hours ago", author: "You", images: ["/73e95d25-727c-45b3-bbb5-1187ce8ad231_removalai_preview.png", "/9a6417c2-8fdb-4d86-ba15-f3df35f58490_removalai_preview.png"] },
-    ],
-    yesterday: [
-        { id: "7731", title: "Forest Environment Pack", type: "scene", time: "Yesterday", author: "You", images: ["/702f4fc5-6f33-4b77-aadc-09c393e7442d_removalai_preview.png"] },
-    ],
-    thisWeek: [
-        { id: "6654", title: "Dungeon Tileset", type: "sprite", time: "3 days ago", author: "You", images: ["/9a6417c2-8fdb-4d86-ba15-f3df35f58490_removalai_preview.png", "/73e95d25-727c-45b3-bbb5-1187ce8ad231_removalai_preview.png", "/702f4fc5-6f33-4b77-aadc-09c393e7442d_removalai_preview.png", "/9a6417c2-8fdb-4d86-ba15-f3df35f58490_removalai_preview.png"] },
-        { id: "5521", title: "NPC Merchant Sprites", type: "sprite", time: "5 days ago", author: "You", images: [] },
-    ],
-};
+interface Project {
+    id: string;
+    title: string;
+    type: string;
+    created_at: string;
+    user_name: string;
+    thumbnail_url?: string;
+}
+
+interface SessionItem {
+    id: string;
+    title: string;
+    type: string;
+    time: string;
+    author: string;
+    images: string[];
+}
+
+function formatTimeAgo(dateString: string): string {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    
+    if (diffHours < 1) return "Just now";
+    if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 7) return `${diffDays} days ago`;
+    return date.toLocaleDateString();
+}
+
+function categorizeByDate(projects: Project[]): { today: SessionItem[]; yesterday: SessionItem[]; thisWeek: SessionItem[] } {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+    const weekStart = new Date(todayStart.getTime() - 7 * 24 * 60 * 60 * 1000);
+    
+    const today: SessionItem[] = [];
+    const yesterday: SessionItem[] = [];
+    const thisWeek: SessionItem[] = [];
+    
+    projects.forEach(project => {
+        const projectDate = new Date(project.created_at);
+        const session: SessionItem = {
+            id: project.id,
+            title: project.title,
+            type: project.type,
+            time: formatTimeAgo(project.created_at),
+            author: project.user_name || "You",
+            images: project.thumbnail_url ? [project.thumbnail_url] : []
+        };
+        
+        if (projectDate >= todayStart) {
+            today.push(session);
+        } else if (projectDate >= yesterdayStart) {
+            yesterday.push(session);
+        } else if (projectDate >= weekStart) {
+            thisWeek.push(session);
+        }
+    });
+    
+    return { today, yesterday, thisWeek };
+}
 
 function RecentSessionsSection() {
     const [isExpanded, setIsExpanded] = useState(false);
     const [activeFilter, setActiveFilter] = useState<"my" | "all" | "archived">("my");
+    const [projects, setProjects] = useState<Project[]>([]);
+    const [loading, setLoading] = useState(true);
+    
+    useEffect(() => {
+        async function fetchProjects() {
+            try {
+                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/projects`);
+                if (response.ok) {
+                    const data = await response.json();
+                    setProjects(data.projects || []);
+                }
+            } catch (error) {
+                console.error("Failed to fetch projects:", error);
+            } finally {
+                setLoading(false);
+            }
+        }
+        fetchProjects();
+    }, []);
+    
+    const recentSessions = categorizeByDate(projects);
 
-    const SessionCard = ({ session }: { session: typeof recentSessions.today[0] }) => (
+    const SessionCard = ({ session }: { session: SessionItem }) => (
         <Link href={`/projects/${session.id}`} className="group block">
             <div className="relative rounded-2xl overflow-hidden bg-[#08080a] border border-white/5 hover:border-primary/30 transition-all hover:shadow-xl hover:shadow-primary/5">
                 {/* Image Preview */}
@@ -93,7 +176,9 @@ function RecentSessionsSection() {
                         <span className={`px-2 py-1 rounded-md text-[10px] font-semibold uppercase tracking-wider backdrop-blur-sm ${
                             session.type === "sprite" 
                                 ? "bg-primary/20 text-primary border border-primary/20" 
-                                : "bg-accent-cyan/20 text-accent-cyan border border-accent-cyan/20"
+                                : session.type === "scene"
+                                ? "bg-accent-cyan/20 text-accent-cyan border border-accent-cyan/20"
+                                : "bg-accent-pink/20 text-accent-pink border border-accent-pink/20"
                         }`}>
                             {session.type}
                         </span>
@@ -115,6 +200,46 @@ function RecentSessionsSection() {
             </div>
         </Link>
     );
+    
+    const totalCount = recentSessions.today.length + recentSessions.yesterday.length + recentSessions.thisWeek.length;
+    
+    if (loading) {
+        return (
+            <div className="mb-24">
+                <div className="flex items-center gap-3 mb-6">
+                    <Clock className="w-5 h-5 text-primary" />
+                    <h2 className="text-lg font-bold text-white">Recent Sessions</h2>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    {[1, 2, 3, 4].map((i) => (
+                        <div key={i} className="rounded-2xl bg-[#08080a] border border-white/5 animate-pulse">
+                            <div className="aspect-[4/3] bg-white/5"></div>
+                            <div className="p-4">
+                                <div className="h-4 bg-white/10 rounded w-3/4 mb-2"></div>
+                                <div className="h-3 bg-white/5 rounded w-1/2"></div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+    }
+    
+    if (totalCount === 0) {
+        return (
+            <div className="mb-24">
+                <div className="flex items-center gap-3 mb-6">
+                    <Clock className="w-5 h-5 text-primary" />
+                    <h2 className="text-lg font-bold text-white">Recent Sessions</h2>
+                </div>
+                <div className="text-center py-16 bg-[#08080a] rounded-2xl border border-white/5">
+                    <ImageIcon className="w-12 h-12 text-white/10 mx-auto mb-4" />
+                    <p className="text-text-muted">No projects yet</p>
+                    <p className="text-text-dim text-sm mt-1">Create your first sprite, scene, or animation to get started!</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="mb-24">
@@ -123,7 +248,7 @@ function RecentSessionsSection() {
                 <div className="flex items-center gap-3">
                     <Clock className="w-5 h-5 text-primary" />
                     <h2 className="text-lg font-bold text-white">Recent Sessions</h2>
-                    <span className="text-xs text-text-dim bg-white/5 px-2 py-0.5 rounded-full">{recentSessions.today.length + recentSessions.yesterday.length + recentSessions.thisWeek.length} total</span>
+                    <span className="text-xs text-text-dim bg-white/5 px-2 py-0.5 rounded-full">{totalCount} total</span>
                 </div>
                 
                 <div className="flex items-center gap-3">
@@ -223,6 +348,8 @@ function RecentSessionsSection() {
 }
 
 export default function HomePage() {
+    usePrefetchRoutes(); // Prefetch routes for faster navigation
+    
     return (
         <AuthGuard>
             <div className="min-h-screen w-full flex flex-col relative overflow-hidden">
@@ -236,7 +363,7 @@ export default function HomePage() {
             {/* Top Bar */}
             <header className="w-full h-20 px-8 flex items-center justify-between z-40 flex-shrink-0 relative">
                 {/* Brand/Logo */}
-                <Logo size="md" />
+                <Logo size="lg" />
 
                 {/* Right Utilities */}
                 <div className="flex items-center gap-4">
@@ -372,14 +499,14 @@ export default function HomePage() {
                             </div>
                         </Link>
 
-                        {/* Card 3: Sheet to GIF */}
-                        <Link href="/tools/gif-converter" className="pixel-card game-card-glow rounded-xl p-1 cursor-pointer group flex flex-col h-[320px] relative overflow-hidden block">
+                        {/* Card 3: Animation Generator */}
+                        <Link href="/animations" className="pixel-card game-card-glow rounded-xl p-1 cursor-pointer group flex flex-col h-[320px] relative overflow-hidden block">
                             <div className="flex-1 w-full flex items-center justify-center relative z-10 p-3">
                                 <div className="w-full h-full bg-gradient-to-br from-[#0a0a0c] to-[#08080a] rounded-lg p-3 flex items-center justify-center border border-white/5 relative overflow-hidden">
                                     <div className="absolute inset-0 pixel-grid opacity-30"></div>
                                     <Image
                                         src="/702f4fc5-6f33-4b77-aadc-09c393e7442d_removalai_preview.png"
-                                        alt="Sheet to GIF"
+                                        alt="Animation Generator"
                                         width={200}
                                         height={200}
                                         className="w-full h-full object-contain drop-shadow-xl group-hover:scale-105 transition-transform duration-300"
@@ -394,11 +521,11 @@ export default function HomePage() {
                                         <Film className="w-4 h-4 text-text-muted group-hover:text-primary transition-colors" />
                                     </div>
                                     <div>
-                                        <h3 className="text-base font-bold text-white group-hover:text-primary transition-colors">Sheet to GIF</h3>
-                                        <p className="text-[10px] text-text-dim">Animation Tool</p>
+                                        <h3 className="text-base font-bold text-white group-hover:text-primary transition-colors">Animation Generator</h3>
+                                        <p className="text-[10px] text-text-dim">AI-Powered Animations</p>
                                     </div>
                                 </div>
-                                <p className="text-text-muted text-xs line-clamp-2">Convert sprite sheets into smooth animated GIFs.</p>
+                                <p className="text-text-muted text-xs line-clamp-2">Generate smooth character animations from your sprites with AI.</p>
                             </div>
                         </Link>
 

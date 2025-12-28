@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { Upload, ArrowLeft, Film, Sparkles } from "lucide-react";
+import { Upload, ArrowLeft, Film, Sparkles, RotateCcw } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { SpriteSheetConverter } from "@/components/generate/SpriteSheetConverter";
@@ -30,6 +30,16 @@ export default function GifConverterPage() {
 
     const handleDragOver = (event: React.DragEvent) => {
         event.preventDefault();
+    };
+
+    const handleReset = () => {
+        if (selectedFile) {
+            URL.revokeObjectURL(selectedFile);
+        }
+        setSelectedFile(null);
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
     };
 
     return (
@@ -104,14 +114,24 @@ export default function GifConverterPage() {
                         </div>
                     </div>
                 ) : (
-                    <div className="flex-1 w-full h-full overflow-hidden bg-[#050506]">
+                    <div className="flex-1 w-full h-full overflow-hidden bg-[#050506] relative">
+                        {/* Header with back button */}
+                        <div className="absolute top-4 left-4 z-10">
+                            <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                onClick={handleReset}
+                                className="gap-2 text-text-muted hover:text-white hover:bg-white/10 bg-black/50 backdrop-blur-sm border border-white/10"
+                            >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                New File
+                            </Button>
+                        </div>
                         <SpriteSheetConverter
                             spriteSheetUrl={selectedFile}
                             onSave={(gifUrl) => {
-                                const link = document.createElement('a');
-                                link.href = gifUrl;
-                                link.download = 'animation.gif';
-                                link.click();
+                                // GIF is already downloaded by the converter
+                                console.log('GIF saved:', gifUrl);
                             }}
                         />
                     </div>

@@ -7,6 +7,8 @@ import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
 import authRoutes from './routes/auth.routes';
 import userRoutes from './routes/user.routes';
+import generationRoutes from './routes/generation.routes';
+import projectRoutes from './routes/project.routes';
 
 const app: Express = express();
 const PORT = process.env.PORT || 3001;
@@ -27,6 +29,8 @@ app.get('/health', (req: Request, res: Response) => {
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/generate', generationRoutes);
+app.use('/api/projects', projectRoutes);
 
 // 404 handler
 app.use((req: Request, res: Response) => {

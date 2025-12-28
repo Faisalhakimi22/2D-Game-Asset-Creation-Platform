@@ -162,7 +162,7 @@ router.put('/profile', authenticateUser, async (req: Request, res: Response) => 
         avatar_url: updatedUser.avatar_url,
         plan: updatedUser.plan_type,
         credits: updatedUser.credits,
-        status: updatedUser.status || 'Active'
+        status: 'Active'
       }
     });
   } catch (error: any) {

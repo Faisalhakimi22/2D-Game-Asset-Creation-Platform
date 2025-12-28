@@ -1179,6 +1179,11 @@ export function SpriteSheetConverter({ spriteSheetUrl, onSave }: SpriteSheetConv
                             {currentFrame + 1} / {rows * cols}
                         </span>
                     </div>
+                    {imageRef.current && (
+                        <div className="text-[9px] text-text-dim text-center">
+                            {Math.floor((imageRef.current.width - offsetLeft - offsetRight) / cols)} × {Math.floor((imageRef.current.height - offsetTop - offsetBottom) / rows)} px
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -1240,8 +1245,11 @@ export function SpriteSheetConverter({ spriteSheetUrl, onSave }: SpriteSheetConv
                         </h3>
                         <div className="space-y-2">
                             <div className="flex justify-between">
-                                <Label className="text-[10px] sm:text-xs text-text-muted">Frame Delay (ms)</Label>
-                                <span className="text-[10px] sm:text-xs font-mono text-primary">{delay}ms</span>
+                                <Label className="text-[10px] sm:text-xs text-text-muted">Frame Delay</Label>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[10px] sm:text-xs font-mono text-primary">{delay}ms</span>
+                                    <span className="text-[10px] sm:text-xs font-mono text-text-dim">({Math.round(1000 / delay)} FPS)</span>
+                                </div>
                             </div>
                             <input
                                 type="range"
@@ -1252,6 +1260,10 @@ export function SpriteSheetConverter({ spriteSheetUrl, onSave }: SpriteSheetConv
                                 onChange={(e) => setDelay(Number(e.target.value))}
                                 className="w-full accent-primary h-1.5 bg-surface-highlight rounded-lg appearance-none cursor-pointer"
                             />
+                            <div className="flex justify-between text-[9px] text-text-dim">
+                                <span>Fast (50 FPS)</span>
+                                <span>Slow (2 FPS)</span>
+                            </div>
                         </div>
                     </div>
 

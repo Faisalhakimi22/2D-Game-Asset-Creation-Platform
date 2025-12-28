@@ -4,7 +4,7 @@
  */
 
 import { put, del, head, list } from '@vercel/blob';
-import type { PutBlobResult, ListBlobResult, Blob } from '@vercel/blob';
+import type { PutBlobResult, ListBlobResult } from '@vercel/blob';
 import { BlobPathBuilder, type BlobUploadInput, type BlobUploadResult, type IBlobService } from '../types/blob-storage.types';
 
 class BlobService implements IBlobService {
@@ -22,8 +22,8 @@ class BlobService implements IBlobService {
    */
   async upload(input: BlobUploadInput): Promise<BlobUploadResult> {
     try {
-      const result = await put(input.path, input.data, {
-        access: input.options?.access || 'public',
+      const result = await put(input.path, input.data as any, {
+        access: 'public',
         token: this.token,
         contentType: input.options?.contentType,
         addRandomSuffix: input.options?.addRandomSuffix || false,
@@ -35,7 +35,7 @@ class BlobService implements IBlobService {
         pathname: result.pathname,
         contentType: result.contentType,
         contentDisposition: result.contentDisposition,
-        size: result.size,
+        size: (result as any).size || 0,
       };
     } catch (error) {
       console.error('Blob upload error:', error);
@@ -98,9 +98,9 @@ class BlobService implements IBlobService {
       });
 
       return {
-        blobs: result.blobs.map((blob: Blob) => ({
+        blobs: result.blobs.map((blob: any) => ({
           pathname: blob.pathname,
-          contentType: blob.contentType,
+          contentType: blob.contentType || 'application/octet-stream',
           contentDisposition: blob.contentDisposition,
           size: blob.size,
           uploadedAt: blob.uploadedAt,

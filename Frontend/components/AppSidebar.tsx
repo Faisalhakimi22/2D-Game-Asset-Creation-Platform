@@ -12,7 +12,7 @@ import { Tooltip } from "./ui/tooltip";
 const menuItems = [
     { href: "/sprites", icon: Image, label: "Sprites", tooltip: "Generate pixel art sprites with AI" },
     { href: "/scenes", icon: Film, label: "Scenes", tooltip: "Create animated scenes and backgrounds" },
-    { href: "/tools/gif-converter", icon: RefreshCw, label: "Converter", tooltip: "Convert sprites to GIF animations" },
+    { href: "/animations", icon: RefreshCw, label: "Animate", tooltip: "AI-generated animation sprite sheets" },
     { href: "/projects", icon: Layers, label: "Projects", tooltip: "Manage your saved projects" },
 ];
 

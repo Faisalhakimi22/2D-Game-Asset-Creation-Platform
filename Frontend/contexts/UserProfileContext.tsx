@@ -9,6 +9,7 @@ interface UserProfileContextType {
     loading: boolean;
     refreshProfile: () => Promise<void>;
     updateCredits: (creditsUsed: number) => Promise<boolean>;
+    setCreditsLocally: (newCredits: number) => void;
 }
 
 const UserProfileContext = createContext<UserProfileContextType | undefined>(undefined);
@@ -17,6 +18,12 @@ export function UserProfileProvider({ children }: { children: React.ReactNode })
     const { user: firebaseUser, loading: authLoading } = useAuth();
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [loading, setLoading] = useState(false);
+    const [mounted, setMounted] = useState(false);
+
+    // Ensure we only render after mounting to avoid hydration mismatch
+    useEffect(() => {
+        setMounted(true);
+    }, []);
 
     const fetchUserProfile = async () => {
         if (!firebaseUser || authLoading) return;
@@ -75,6 +82,7 @@ export function UserProfileProvider({ children }: { children: React.ReactNode })
         }
     };
 
+    // Deduct credits via API (for manual deduction if needed)
     const updateCredits = async (creditsUsed: number): Promise<boolean> => {
         if (!firebaseUser || !userProfile) return false;
 
@@ -106,16 +114,32 @@ export function UserProfileProvider({ children }: { children: React.ReactNode })
         }
     };
 
+    // Update credits locally without API call (used when backend already deducted)
+    const setCreditsLocally = (newCredits: number) => {
+        setUserProfile(prev => prev ? {
+            ...prev,
+            credits: newCredits
+        } : null);
+    };
+
     useEffect(() => {
-        fetchUserProfile();
-    }, [firebaseUser, authLoading]);
+        if (mounted && !authLoading) {
+            fetchUserProfile();
+        }
+    }, [firebaseUser, authLoading, mounted]);
 
     const value: UserProfileContextType = {
         userProfile,
-        loading: loading || authLoading,
+        loading: !mounted || loading || authLoading,
         refreshProfile: fetchUserProfile,
         updateCredits,
+        setCreditsLocally,
     };
+
+    // Don't render children until mounted to prevent hydration errors
+    if (!mounted) {
+        return null;
+    }
 
     return (
         <UserProfileContext.Provider value={value}>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import {
     Upload,
@@ -10,7 +10,6 @@ import {
     Wand2,
     Grid3x3,
     ZoomIn,
-    Maximize,
     Download,
     Command,
     Eye,
@@ -24,12 +23,14 @@ import {
     Square,
     Trees,
     Home,
+    AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useUpdateCredits } from "@/hooks/useUserProfile";
+import { useSetCreditsLocally } from "@/hooks/useUserProfile";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AppSidebar } from "@/components/AppSidebar";
+import { auth } from "@/lib/firebase";
 
 type SceneType = "indoor" | "outdoor";
 type Viewpoint = "front" | "back" | "side" | "top_down" | "isometric";
@@ -41,7 +42,7 @@ export const dynamic = "force-dynamic";
 function GenerateScenePageContent() {
     const searchParams = useSearchParams();
     const projectId = searchParams.get("projectId");
-    const { updateCredits } = useUpdateCredits();
+    const { setCreditsLocally } = useSetCreditsLocally();
 
     // State
     const [sceneType, setSceneType] = useState<SceneType>("outdoor");
@@ -60,7 +61,10 @@ function GenerateScenePageContent() {
     const [isDragging, setIsDragging] = useState(false);
     const [panelCollapsed, setPanelCollapsed] = useState(false);
     const [basicSettingsOpen, setBasicSettingsOpen] = useState(true);
-    const [advancedConfigOpen, setAdvancedConfigOpen] = useState(false);
+    const [generationError, setGenerationError] = useState<string | null>(null);
+    const [showGrid, setShowGrid] = useState(true);
+    const [zoomLevel, setZoomLevel] = useState(100);
+    const [zoomedImage, setZoomedImage] = useState<string | null>(null);
     const mainRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -101,23 +105,97 @@ function GenerateScenePageContent() {
 
     const handleGenerateScene = async () => {
         if (!prompt.trim()) return;
-        const success = await updateCredits(8);
-        if (!success) { alert('Insufficient credits.'); return; }
+        
         setIsGenerating(true);
-        setTimeout(() => {
-            setPreviewImages(Array.from({ length: imageQuantity }, () => `https://picsum.photos/seed/${Math.random()}/800/600`));
+        setGenerationError(null);
+        setPreviewImages([]);
+        setSelectedPreview(null);
+        
+        try {
+            const user = auth.currentUser;
+            if (!user) {
+                throw new Error('Please sign in to generate scenes');
+            }
+            const idToken = await user.getIdToken();
+            
+            const userApiKey = localStorage.getItem('replicate_api_key') || localStorage.getItem('gemini_api_key');
+            const userProvider = localStorage.getItem('replicate_api_key') ? 'replicate' : 
+                                 localStorage.getItem('gemini_api_key') ? 'gemini' : undefined;
+            
+            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/generate/scene`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${idToken}`
+                },
+                body: JSON.stringify({
+                    prompt: `${sceneType === 'outdoor' ? 'Outdoor scene: ' : 'Indoor scene: '}${prompt}`,
+                    style,
+                    aspectRatio,
+                    viewpoint,
+                    colors,
+                    quantity: imageQuantity,
+                    referenceImage,
+                    apiKey: userApiKey || undefined,
+                    provider: userProvider
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (!response.ok) {
+                if (response.status === 402) {
+                    throw new Error(`Insufficient credits. You need ${data.required} credits but have ${data.available}.`);
+                }
+                throw new Error(data.error || 'Failed to generate scene');
+            }
+            
+            if (data.success && data.images?.length > 0) {
+                setPreviewImages(data.images);
+                // Update credits locally (backend already deducted)
+                if (typeof data.remainingCredits === 'number') {
+                    setCreditsLocally(data.remainingCredits);
+                }
+            } else {
+                throw new Error('No images were generated');
+            }
+        } catch (error: any) {
+            console.error('Generation error:', error);
+            setGenerationError(error.message || 'Failed to generate scene. Please try again.');
+        } finally {
             setIsGenerating(false);
-        }, 2000);
+        }
     };
 
     const handleCreateProject = () => {
         if (selectedPreview !== null) window.location.href = projectId ? `/projects` : "/projects";
     };
 
+    const handleDownload = async (imageUrl: string, index: number) => {
+        try {
+            const response = await fetch(imageUrl);
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `scene-${index + 1}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error('Download failed:', error);
+        }
+    };
+
     const handleReset = () => {
         setPrompt(""); setReferenceImage(null); setColors([]); setViewpoint("isometric");
         setStyle("pixel_art"); setAspectRatio("4:3"); setImageQuantity(2);
+        setPreviewImages([]); setSelectedPreview(null); setGenerationError(null);
     };
+
+    const handleZoomIn = () => setZoomLevel(prev => Math.min(prev + 25, 200));
+    const handleZoomOut = () => setZoomLevel(prev => Math.max(prev - 25, 50));
 
     const getImageDimensions = () => {
         const map: Record<AspectRatio, string> = { "2:3": "688 x 1024", "1:1": "1024 x 1024", "9:16": "576 x 1024", "4:3": "1024 x 768", "3:2": "1024 x 688", "16:9": "1024 x 576" };
@@ -334,30 +412,83 @@ function GenerateScenePageContent() {
                                 <span className="text-xs font-medium text-text">Preview</span>
                             </div>
                             <div className="h-4 w-px bg-white/10" />
-                            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.03] border border-white/5">
-                                <span className="text-[10px] font-mono text-text-muted">Zoom:</span>
-                                <span className="text-[10px] font-mono text-primary font-semibold">100%</span>
+                            <div className="flex items-center gap-1">
+                                <button 
+                                    onClick={handleZoomOut}
+                                    disabled={zoomLevel <= 50}
+                                    className="p-1 rounded hover:bg-white/[0.05] text-text-muted hover:text-primary transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                >
+                                    <span className="text-xs font-bold">−</span>
+                                </button>
+                                <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/[0.03] border border-white/5 min-w-[70px] justify-center">
+                                    <span className="text-[10px] font-mono text-primary font-semibold">{zoomLevel}%</span>
+                                </div>
+                                <button 
+                                    onClick={handleZoomIn}
+                                    disabled={zoomLevel >= 200}
+                                    className="p-1 rounded hover:bg-white/[0.05] text-text-muted hover:text-primary transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                >
+                                    <span className="text-xs font-bold">+</span>
+                                </button>
                             </div>
                         </div>
                         <div className="flex items-center gap-1">
-                            <Tooltip content="Toggle grid overlay" side="bottom">
-                                <Button variant="ghost" size="icon" className="w-8 h-8 rounded-lg hover:bg-white/[0.05] hover:text-primary text-text-muted transition-colors"><Grid3x3 className="w-4 h-4" /></Button>
-                            </Tooltip>
-                            <Tooltip content="Fullscreen preview" side="bottom">
-                                <Button variant="ghost" size="icon" className="w-8 h-8 rounded-lg hover:bg-white/[0.05] hover:text-primary text-text-muted transition-colors"><Maximize className="w-4 h-4" /></Button>
+                            <Tooltip content={showGrid ? "Hide grid" : "Show grid"} side="bottom">
+                                <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    onClick={() => setShowGrid(!showGrid)}
+                                    className={`w-8 h-8 rounded-lg hover:bg-white/[0.05] transition-colors ${showGrid ? 'text-primary bg-primary/10' : 'text-text-muted hover:text-primary'}`}
+                                >
+                                    <Grid3x3 className="w-4 h-4" />
+                                </Button>
                             </Tooltip>
                         </div>
                     </div>
 
                     <div className="flex-1 overflow-auto flex items-center justify-center relative bg-[#09090b]">
-                        <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
-                        {previewImages.length === 0 ? (
+                        {showGrid && (
+                            <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
+                        )}
+                        
+                        {/* Error Display */}
+                        {generationError && (
+                            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 max-w-md">
+                                <div className="flex items-center gap-3 px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-xl backdrop-blur-sm">
+                                    <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
+                                    <p className="text-sm text-red-400">{generationError}</p>
+                                    <button onClick={() => setGenerationError(null)} className="p-1 hover:bg-red-500/20 rounded-lg transition-colors">
+                                        <X className="w-4 h-4 text-red-400" />
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Loading State */}
+                        {isGenerating && (
+                            <div className="text-center space-y-4">
+                                <div className="w-20 h-20 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto animate-pulse">
+                                    <Sparkles className="w-8 h-8 text-primary animate-spin" />
+                                </div>
+                                <div className="space-y-2">
+                                    <p className="text-sm font-medium text-text">Generating your scene...</p>
+                                    <p className="text-xs text-text-muted">This may take 10-30 seconds</p>
+                                </div>
+                            </div>
+                        )}
+
+                        {!isGenerating && previewImages.length === 0 && !generationError && (
                             <div className="text-center space-y-4 max-w-xs opacity-50">
                                 <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/15 flex items-center justify-center mx-auto shadow-lg shadow-primary/10"><Command className="w-6 h-6 text-primary" /></div>
                                 <p className="text-sm text-text-muted font-medium">Configure settings and generate to see results</p>
                             </div>
-                        ) : (
-                            <div className="grid grid-cols-2 gap-8 p-12 w-full max-w-4xl animate-in fade-in zoom-in duration-300">
+                        )}
+                        
+                        {!isGenerating && previewImages.length > 0 && (
+                            <div 
+                                className="grid grid-cols-2 gap-8 p-12 w-full max-w-4xl animate-in fade-in zoom-in duration-300 transition-transform origin-center"
+                                style={{ transform: `scale(${zoomLevel / 100})` }}
+                            >
                                 {previewImages.map((img, index) => (
                                     <div key={index} onClick={() => setSelectedPreview(index)}
                                         className={`group relative aspect-video bg-surface rounded-xl border transition-all duration-200 cursor-pointer ${selectedPreview === index ? 'border-primary shadow-lg shadow-primary/30' : 'border-primary/15 hover:border-primary/40 hover:shadow-lg hover:shadow-primary/20'}`}>
@@ -368,11 +499,39 @@ function GenerateScenePageContent() {
                                         <div className="absolute inset-4 flex items-center justify-center"><img src={img} alt="Generated Scene" className="w-full h-full object-cover rounded-md" /></div>
                                         <div className={`absolute top-3 right-3 w-5 h-5 rounded-full bg-primary flex items-center justify-center transition-all ${selectedPreview === index ? 'opacity-100 scale-100' : 'opacity-0 scale-90'}`}><Check className="w-3 h-3 text-white" /></div>
                                         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 backdrop-blur rounded-lg p-1 border border-primary/20">
-                                            <Button variant="ghost" size="icon" className="w-6 h-6 rounded hover:bg-primary/20 text-primary transition-colors"><ZoomIn className="w-3 h-3" /></Button>
-                                            <Button variant="ghost" size="icon" className="w-6 h-6 rounded hover:bg-primary/20 text-primary transition-colors"><Download className="w-3 h-3" /></Button>
+                                            <Button 
+                                                variant="ghost" 
+                                                size="icon" 
+                                                className="w-6 h-6 rounded hover:bg-primary/20 text-primary transition-colors"
+                                                onClick={(e) => { e.stopPropagation(); setZoomedImage(img); }}
+                                            >
+                                                <ZoomIn className="w-3 h-3" />
+                                            </Button>
+                                            <Button variant="ghost" size="icon" className="w-6 h-6 rounded hover:bg-primary/20 text-primary transition-colors" onClick={(e) => { e.stopPropagation(); handleDownload(img, index); }}><Download className="w-3 h-3" /></Button>
                                         </div>
                                     </div>
                                 ))}
+                            </div>
+                        )}
+
+                        {/* Zoomed Image Modal */}
+                        {zoomedImage && (
+                            <div 
+                                className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-8"
+                                onClick={() => setZoomedImage(null)}
+                            >
+                                <button 
+                                    className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                                    onClick={() => setZoomedImage(null)}
+                                >
+                                    <X className="w-6 h-6 text-white" />
+                                </button>
+                                <img 
+                                    src={zoomedImage} 
+                                    alt="Zoomed Scene" 
+                                    className="max-w-full max-h-full object-contain rounded-xl border border-white/10"
+                                    onClick={(e) => e.stopPropagation()}
+                                />
                             </div>
                         )}
                     </div>
@@ -391,6 +550,14 @@ function GenerateScenePageContent() {
     );
 }
 
+function GenerateScenePageContentWrapper() {
+    return (
+        <Suspense fallback={<div className="h-screen flex items-center justify-center bg-background"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>}>
+            <GenerateScenePageContent />
+        </Suspense>
+    );
+}
+
 export default function GenerateScenePage() {
-    return <AuthGuard><GenerateScenePageContent /></AuthGuard>;
+    return <AuthGuard><GenerateScenePageContentWrapper /></AuthGuard>;
 }

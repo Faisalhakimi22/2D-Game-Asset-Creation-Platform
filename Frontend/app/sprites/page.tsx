@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import {
     ChevronLeft,
@@ -13,10 +13,8 @@ import {
     ZoomIn,
     Maximize,
     Download,
-    Command,
     Eye,
     Plus,
-    FolderPlus,
     User,
     Box,
     Move,
@@ -26,19 +24,17 @@ import {
     RectangleHorizontal,
     RectangleVertical,
     Square,
+    AlertCircle,
+    Command,
+    FolderPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
-import Link from "next/link";
-import nextDynamic from "next/dynamic";
-import { useUpdateCredits, useUserProfile } from "@/hooks/useUserProfile";
+import { useSetCreditsLocally } from "@/hooks/useUserProfile";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AppSidebar } from "@/components/AppSidebar";
-
-const PoseEditor = nextDynamic(() => import("@/components/pose-editor/PoseEditor"), {
-    ssr: false,
-    loading: () => <div className="flex items-center justify-center h-full text-text-muted">Loading 3D Editor...</div>
-});
+import { auth } from "@/lib/firebase";
+import { PoseSelector } from "@/components/PoseSelector";
 
 type SpriteType = "character" | "object";
 type Viewpoint = "front" | "back" | "side" | "top_down" | "isometric";
@@ -50,8 +46,7 @@ export const dynamic = "force-dynamic";
 function GenerateSpritePageContent() {
     const searchParams = useSearchParams();
     const projectId = searchParams.get("projectId");
-    const { updateCredits } = useUpdateCredits();
-    const userProfile = useUserProfile();
+    const { setCreditsLocally } = useSetCreditsLocally();
 
     // State
     const [spriteType, setSpriteType] = useState<SpriteType>("character");
@@ -69,8 +64,13 @@ function GenerateSpritePageContent() {
     const [selectedPreview, setSelectedPreview] = useState<number | null>(null);
     const [sidebarWidth, setSidebarWidth] = useState(340);
     const [isDragging, setIsDragging] = useState(false);
-    const [isEditingPose, setIsEditingPose] = useState(false);
     const [poseImage, setPoseImage] = useState<string | null>(null);
+    const [poseKeywords, setPoseKeywords] = useState<string | null>(null);
+    const [generationError, setGenerationError] = useState<string | null>(null);
+    const [showGrid, setShowGrid] = useState(true);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const [zoomLevel, setZoomLevel] = useState(100);
+    const [zoomedImage, setZoomedImage] = useState<string | null>(null);
     
     // Collapsible sections
     const [basicSettingsOpen, setBasicSettingsOpen] = useState(true);
@@ -124,25 +124,99 @@ function GenerateSpritePageContent() {
 
     const handleGenerateSprite = async () => {
         if (!prompt.trim()) return;
-        const creditsRequired = 5;
-        const success = await updateCredits(creditsRequired);
-        if (!success) {
-            alert('Insufficient credits or failed to process payment.');
-            return;
-        }
+        
         setIsGenerating(true);
-        setTimeout(() => {
-            const mockImages = Array.from({ length: imageQuantity }, () => 
-                `https://picsum.photos/seed/${Math.random()}/400/400`
-            );
-            setPreviewImages(mockImages);
+        setGenerationError(null);
+        setPreviewImages([]);
+        setSelectedPreview(null);
+        
+        try {
+            // Get Firebase auth token
+            const user = auth.currentUser;
+            if (!user) {
+                throw new Error('Please sign in to generate sprites');
+            }
+            const idToken = await user.getIdToken();
+            
+            // Get user's BYOK API key if available
+            const userApiKey = localStorage.getItem('replicate_api_key') || localStorage.getItem('gemini_api_key');
+            const userProvider = localStorage.getItem('replicate_api_key') ? 'replicate' : 
+                                 localStorage.getItem('gemini_api_key') ? 'gemini' : undefined;
+            
+            // Build prompt with pose keywords if selected
+            let fullPrompt = `${spriteType === 'character' ? 'Character sprite: ' : 'Object sprite: '}${prompt}`;
+            if (poseKeywords && spriteType === 'character') {
+                fullPrompt += `, ${poseKeywords}`;
+            }
+            
+            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/generate/sprite`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${idToken}`
+                },
+                body: JSON.stringify({
+                    prompt: fullPrompt,
+                    style,
+                    aspectRatio,
+                    viewpoint,
+                    colors,
+                    dimensions,
+                    quantity: imageQuantity,
+                    referenceImage,
+                    poseImage,
+                    apiKey: userApiKey || undefined,
+                    provider: userProvider,
+                    saveToCloud: true
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (!response.ok) {
+                if (response.status === 402) {
+                    throw new Error(`Insufficient credits. You need ${data.required} credits but have ${data.available}.`);
+                }
+                throw new Error(data.error || 'Failed to generate sprite');
+            }
+            
+            if (data.success && data.images?.length > 0) {
+                setPreviewImages(data.images);
+                // Update credits locally (backend already deducted)
+                if (typeof data.remainingCredits === 'number') {
+                    setCreditsLocally(data.remainingCredits);
+                }
+            } else {
+                throw new Error('No images were generated');
+            }
+        } catch (error: any) {
+            console.error('Generation error:', error);
+            setGenerationError(error.message || 'Failed to generate sprite. Please try again.');
+        } finally {
             setIsGenerating(false);
-        }, 2000);
+        }
     };
 
     const handleCreateProject = () => {
         if (selectedPreview !== null) {
             window.location.href = projectId ? `/projects` : "/projects";
+        }
+    };
+
+    const handleDownload = async (imageUrl: string, index: number) => {
+        try {
+            const response = await fetch(imageUrl);
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `sprite-${index + 1}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error('Download failed:', error);
         }
     };
 
@@ -156,6 +230,10 @@ function GenerateSpritePageContent() {
         setAspectRatio("2:3");
         setImageQuantity(2);
         setPoseImage(null);
+        setPoseKeywords(null);
+        setPreviewImages([]);
+        setSelectedPreview(null);
+        setGenerationError(null);
     };
 
     const getImageDimensions = () => {
@@ -169,6 +247,37 @@ function GenerateSpritePageContent() {
         };
         return ratioMap[aspectRatio];
     };
+
+    const handleZoomIn = () => {
+        setZoomLevel(prev => Math.min(prev + 25, 200));
+    };
+
+    const handleZoomOut = () => {
+        setZoomLevel(prev => Math.max(prev - 25, 50));
+    };
+
+    const toggleFullscreen = () => {
+        if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen();
+            setIsFullscreen(true);
+        } else {
+            document.exitFullscreen();
+            setIsFullscreen(false);
+        }
+    };
+
+    const openImageZoom = (imageUrl: string) => {
+        setZoomedImage(imageUrl);
+    };
+
+    // Listen for fullscreen changes
+    useEffect(() => {
+        const handleFullscreenChange = () => {
+            setIsFullscreen(!!document.fullscreenElement);
+        };
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    }, []);
 
     return (
         <div className="h-screen flex bg-background text-text font-sans selection:bg-primary/30 overflow-hidden">
@@ -250,9 +359,12 @@ function GenerateSpritePageContent() {
                                             </div>
                                         </div>
 
-                                        {/* Reference Image - Enhanced */}
+                                        {/* Style Reference - Enhanced */}
                                         <div className="space-y-2">
-                                            <span className="text-xs font-medium text-text">Reference Image</span>
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-xs font-medium text-text">Style Reference</span>
+                                                <span className="text-[9px] text-text-dim">Optional</span>
+                                            </div>
                                             {referenceImage ? (
                                                 <div className="relative w-full h-20 rounded-xl border border-white/10 overflow-hidden group bg-black/30">
                                                     <img src={referenceImage} alt="Reference" className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
@@ -262,11 +374,11 @@ function GenerateSpritePageContent() {
                                                     </button>
                                                 </div>
                                             ) : (
-                                                <label className="flex flex-col items-center justify-center gap-2 w-full h-20 border-2 border-dashed border-white/10 rounded-xl cursor-pointer hover:bg-white/[0.02] hover:border-primary/30 transition-all group">
-                                                    <div className="p-2 rounded-lg bg-white/[0.03] group-hover:bg-primary/10 transition-colors">
-                                                        <Upload className="w-4 h-4 text-text-muted group-hover:text-primary transition-colors" />
+                                                <label className="flex flex-col items-center justify-center gap-2 w-full h-16 border-2 border-dashed border-white/10 rounded-xl cursor-pointer hover:bg-white/[0.02] hover:border-primary/30 transition-all group">
+                                                    <div className="flex items-center gap-2">
+                                                        <Upload className="w-3.5 h-3.5 text-text-muted group-hover:text-primary transition-colors" />
+                                                        <span className="text-[10px] text-text-muted group-hover:text-primary transition-colors">Upload style inspiration</span>
                                                     </div>
-                                                    <span className="text-[11px] text-text-muted group-hover:text-primary transition-colors">Drop image or click to upload</span>
                                                     <input type="file" onChange={handleReferenceImageUpload} accept="image/png,image/jpeg,image/webp" className="hidden" />
                                                 </label>
                                             )}
@@ -468,6 +580,9 @@ function GenerateSpritePageContent() {
                                             <div className="w-1 h-4 rounded-full bg-gradient-to-b from-accent-orange to-accent-orange/30" />
                                             <span className="text-xs font-semibold text-text uppercase tracking-wide">Pose</span>
                                             <Move className="w-3.5 h-3.5 text-accent-orange" />
+                                            {(poseKeywords || poseImage) && (
+                                                <span className="ml-1 px-1.5 py-0.5 bg-primary/20 text-primary text-[9px] font-medium rounded">Selected</span>
+                                            )}
                                         </div>
                                         <div className={`p-1 rounded-md bg-white/[0.03] transition-transform duration-200 ${poseSettingsOpen ? '' : 'rotate-180'}`}>
                                             <ChevronUp className="w-3.5 h-3.5 text-text-muted" />
@@ -476,41 +591,12 @@ function GenerateSpritePageContent() {
                                     
                                     {poseSettingsOpen && (
                                         <div className="px-4 pb-4">
-                                            {poseImage ? (
-                                                <div className="space-y-3">
-                                                    <div className="relative w-full aspect-square rounded-xl border border-white/10 overflow-hidden bg-black/40 group">
-                                                        <img src={poseImage} alt="Captured Pose" className="w-full h-full object-contain" />
-                                                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center pb-4 gap-2">
-                                                            <button onClick={() => setIsEditingPose(true)} className="px-4 py-2 text-xs font-medium bg-white/10 hover:bg-white/20 text-text rounded-lg transition-colors backdrop-blur-sm border border-white/10">
-                                                                Edit Pose
-                                                            </button>
-                                                            <button onClick={() => setPoseImage(null)} className="p-2 bg-accent-coral/80 hover:bg-accent-coral text-white rounded-lg transition-colors">
-                                                                <Trash2 className="w-4 h-4" />
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                    <div className="flex items-center justify-center gap-2 text-[11px] text-primary">
-                                                        <Check className="w-3.5 h-3.5" />
-                                                        <span>Pose ready for generation</span>
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                <div className="p-6 rounded-xl bg-gradient-to-b from-white/[0.02] to-transparent border-2 border-dashed border-white/10 flex flex-col items-center justify-center gap-4 text-center hover:border-accent-orange/30 transition-colors group">
-                                                    <div className="p-3 rounded-xl bg-accent-orange/10 border border-accent-orange/20 group-hover:bg-accent-orange/15 transition-colors">
-                                                        <Move className="w-6 h-6 text-accent-orange" />
-                                                    </div>
-                                                    <div className="space-y-1">
-                                                        <p className="text-xs font-medium text-text">Custom Character Pose</p>
-                                                        <p className="text-[11px] text-text-dim">Define the exact pose for your sprite</p>
-                                                    </div>
-                                                    <button
-                                                        onClick={() => setIsEditingPose(true)}
-                                                        className="px-5 py-2.5 text-xs font-semibold bg-gradient-to-r from-accent-orange/20 to-accent-orange/10 text-accent-orange border border-accent-orange/30 rounded-xl hover:from-accent-orange/30 hover:to-accent-orange/20 transition-all"
-                                                    >
-                                                        Open Pose Editor
-                                                    </button>
-                                                </div>
-                                            )}
+                                            <PoseSelector
+                                                selectedPose={poseKeywords}
+                                                onPoseSelect={setPoseKeywords}
+                                                customPoseImage={poseImage}
+                                                onCustomPoseImage={setPoseImage}
+                                            />
                                         </div>
                                     )}
                                 </div>
@@ -581,19 +667,7 @@ function GenerateSpritePageContent() {
 
                 {/* Right Panel - Viewport */}
                 <div className="flex-1 bg-background relative flex flex-col overflow-hidden">
-                    {isEditingPose ? (
-                        <div className="flex-1 relative z-20 w-full h-full overflow-hidden">
-                            <PoseEditor
-                                onSave={(dataUrl: string) => {
-                                    setPoseImage(dataUrl);
-                                    setIsEditingPose(false);
-                                }}
-                                onCancel={() => setIsEditingPose(false)}
-                            />
-                        </div>
-                    ) : (
-                        <>
-                            {/* Viewport Header */}
+                    {/* Viewport Header */}
                             <div className="h-12 border-b border-white/5 flex items-center justify-between px-5 bg-[#0a0a0c]">
                                 <div className="flex items-center gap-3">
                                     <div className="flex items-center gap-2">
@@ -601,19 +675,44 @@ function GenerateSpritePageContent() {
                                         <span className="text-xs font-medium text-text">Preview</span>
                                     </div>
                                     <div className="h-4 w-px bg-white/10" />
-                                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.03] border border-white/5">
-                                        <span className="text-[10px] font-mono text-text-muted">Zoom:</span>
-                                        <span className="text-[10px] font-mono text-primary font-semibold">100%</span>
+                                    <div className="flex items-center gap-1">
+                                        <button 
+                                            onClick={handleZoomOut}
+                                            disabled={zoomLevel <= 50}
+                                            className="p-1 rounded hover:bg-white/[0.05] text-text-muted hover:text-primary transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                        >
+                                            <span className="text-xs font-bold">−</span>
+                                        </button>
+                                        <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/[0.03] border border-white/5 min-w-[70px] justify-center">
+                                            <span className="text-[10px] font-mono text-primary font-semibold">{zoomLevel}%</span>
+                                        </div>
+                                        <button 
+                                            onClick={handleZoomIn}
+                                            disabled={zoomLevel >= 200}
+                                            className="p-1 rounded hover:bg-white/[0.05] text-text-muted hover:text-primary transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                        >
+                                            <span className="text-xs font-bold">+</span>
+                                        </button>
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-1">
-                                    <Tooltip content="Toggle grid overlay" side="bottom">
-                                        <Button variant="ghost" size="icon" className="w-8 h-8 rounded-lg hover:bg-white/[0.05] hover:text-primary text-text-muted transition-colors">
+                                    <Tooltip content={showGrid ? "Hide grid" : "Show grid"} side="bottom">
+                                        <Button 
+                                            variant="ghost" 
+                                            size="icon" 
+                                            onClick={() => setShowGrid(!showGrid)}
+                                            className={`w-8 h-8 rounded-lg hover:bg-white/[0.05] transition-colors ${showGrid ? 'text-primary bg-primary/10' : 'text-text-muted hover:text-primary'}`}
+                                        >
                                             <Grid3x3 className="w-4 h-4" />
                                         </Button>
                                     </Tooltip>
-                                    <Tooltip content="Fullscreen preview" side="bottom">
-                                        <Button variant="ghost" size="icon" className="w-8 h-8 rounded-lg hover:bg-white/[0.05] hover:text-primary text-text-muted transition-colors">
+                                    <Tooltip content={isFullscreen ? "Exit fullscreen" : "Fullscreen"} side="bottom">
+                                        <Button 
+                                            variant="ghost" 
+                                            size="icon" 
+                                            onClick={toggleFullscreen}
+                                            className={`w-8 h-8 rounded-lg hover:bg-white/[0.05] transition-colors ${isFullscreen ? 'text-primary bg-primary/10' : 'text-text-muted hover:text-primary'}`}
+                                        >
                                             <Maximize className="w-4 h-4" />
                                         </Button>
                                     </Tooltip>
@@ -622,17 +721,50 @@ function GenerateSpritePageContent() {
 
                             {/* Canvas Area */}
                             <div className="flex-1 overflow-auto flex items-center justify-center relative bg-[#09090b]">
-                                <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
+                                {showGrid && (
+                                    <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
+                                )}
 
-                                {previewImages.length === 0 ? (
+                                {/* Error Display */}
+                                {generationError && (
+                                    <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 max-w-md">
+                                        <div className="flex items-center gap-3 px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-xl backdrop-blur-sm">
+                                            <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
+                                            <p className="text-sm text-red-400">{generationError}</p>
+                                            <button onClick={() => setGenerationError(null)} className="p-1 hover:bg-red-500/20 rounded-lg transition-colors">
+                                                <X className="w-4 h-4 text-red-400" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Loading State */}
+                                {isGenerating && (
+                                    <div className="text-center space-y-4">
+                                        <div className="w-20 h-20 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto animate-pulse">
+                                            <Sparkles className="w-8 h-8 text-primary animate-spin" />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <p className="text-sm font-medium text-text">Generating your sprite...</p>
+                                            <p className="text-xs text-text-muted">This may take 10-30 seconds</p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {!isGenerating && previewImages.length === 0 && !generationError && (
                                     <div className="text-center space-y-4 max-w-xs opacity-50">
                                         <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/15 flex items-center justify-center mx-auto shadow-lg shadow-primary/10">
                                             <Command className="w-6 h-6 text-primary" />
                                         </div>
                                         <p className="text-sm text-text-muted font-medium">Configure settings and generate to see results</p>
                                     </div>
-                                ) : (
-                                    <div className="grid grid-cols-2 gap-8 p-12 w-full max-w-4xl animate-in fade-in zoom-in duration-300">
+                                )}
+                                
+                                {!isGenerating && previewImages.length > 0 && (
+                                    <div 
+                                        className="grid grid-cols-2 gap-8 p-12 w-full max-w-4xl animate-in fade-in zoom-in duration-300 transition-transform origin-center"
+                                        style={{ transform: `scale(${zoomLevel / 100})` }}
+                                    >
                                         {previewImages.map((img, index) => (
                                             <div
                                                 key={index}
@@ -648,16 +780,26 @@ function GenerateSpritePageContent() {
                                                 <div className="absolute bottom-0 left-0 w-2 h-2 border-b border-l border-primary/30 rounded-bl-lg m-2" />
                                                 <div className="absolute bottom-0 right-0 w-2 h-2 border-b border-r border-primary/30 rounded-br-lg m-2" />
                                                 <div className="absolute inset-4 flex items-center justify-center">
-                                                    <img src={img} alt="Generated Sprite" className="w-full h-full object-contain pixelated" />
+                                                    <img src={img} alt="Generated Sprite" className="w-full h-full object-contain pixelated" style={{ imageRendering: 'pixelated' }} />
                                                 </div>
                                                 <div className={`absolute top-3 right-3 w-5 h-5 rounded-full bg-primary flex items-center justify-center transition-all ${selectedPreview === index ? 'opacity-100 scale-100' : 'opacity-0 scale-90'}`}>
                                                     <Check className="w-3 h-3 text-white" />
                                                 </div>
                                                 <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 backdrop-blur rounded-lg p-1 border border-primary/20">
-                                                    <Button variant="ghost" size="icon" className="w-6 h-6 rounded hover:bg-primary/20 text-primary transition-colors">
+                                                    <Button 
+                                                        variant="ghost" 
+                                                        size="icon" 
+                                                        className="w-6 h-6 rounded hover:bg-primary/20 text-primary transition-colors"
+                                                        onClick={(e) => { e.stopPropagation(); setZoomedImage(img); }}
+                                                    >
                                                         <ZoomIn className="w-3 h-3" />
                                                     </Button>
-                                                    <Button variant="ghost" size="icon" className="w-6 h-6 rounded hover:bg-primary/20 text-primary transition-colors">
+                                                    <Button 
+                                                        variant="ghost" 
+                                                        size="icon" 
+                                                        className="w-6 h-6 rounded hover:bg-primary/20 text-primary transition-colors"
+                                                        onClick={(e) => { e.stopPropagation(); handleDownload(img, index); }}
+                                                    >
                                                         <Download className="w-3 h-3" />
                                                     </Button>
                                                 </div>
@@ -665,32 +807,52 @@ function GenerateSpritePageContent() {
                                         ))}
                                     </div>
                                 )}
+
+                                {/* Zoomed Image Modal */}
+                                {zoomedImage && (
+                                    <div 
+                                        className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-8"
+                                        onClick={() => setZoomedImage(null)}
+                                    >
+                                        <button 
+                                            className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                                            onClick={() => setZoomedImage(null)}
+                                        >
+                                            <X className="w-6 h-6 text-white" />
+                                        </button>
+                                        <img 
+                                            src={zoomedImage} 
+                                            alt="Zoomed Sprite" 
+                                            className="max-w-full max-h-full object-contain rounded-xl border border-white/10"
+                                            style={{ imageRendering: 'pixelated' }}
+                                            onClick={(e) => e.stopPropagation()}
+                                        />
+                                    </div>
+                                )}
                             </div>
 
-                            {/* Fixed Floating Action Button */}
-                            {selectedPreview !== null && (
-                                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-surface/90 backdrop-blur-md border border-primary/15 rounded-full pl-4 pr-1.5 py-1.5 flex items-center gap-4 shadow-lg shadow-primary/20 animate-in slide-in-from-bottom-4 z-10">
-                                    <span className="text-xs font-medium text-text">Variant {selectedPreview + 1} selected</span>
-                                    <Button
-                                        onClick={handleCreateProject}
-                                        size="sm"
-                                        className="h-7 rounded-full bg-primary text-primary-foreground hover:bg-primary-600 font-semibold text-xs px-4 shadow-lg shadow-primary/30 flex items-center gap-1.5"
-                                    >
-                                        {projectId ? (
-                                            <>
-                                                <Plus className="w-3.5 h-3.5" />
-                                                Add to Project
-                                            </>
-                                        ) : (
-                                            <>
-                                                <FolderPlus className="w-3.5 h-3.5" />
-                                                Create Project
-                                            </>
-                                        )}
-                                    </Button>
-                                </div>
-                            )}
-                        </>
+                    {/* Fixed Floating Action Button */}
+                    {selectedPreview !== null && (
+                        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-surface/90 backdrop-blur-md border border-primary/15 rounded-full pl-4 pr-1.5 py-1.5 flex items-center gap-4 shadow-lg shadow-primary/20 animate-in slide-in-from-bottom-4 z-10">
+                            <span className="text-xs font-medium text-text">Variant {selectedPreview + 1} selected</span>
+                            <Button
+                                onClick={handleCreateProject}
+                                size="sm"
+                                className="h-7 rounded-full bg-primary text-primary-foreground hover:bg-primary-600 font-semibold text-xs px-4 shadow-lg shadow-primary/30 flex items-center gap-1.5"
+                            >
+                                {projectId ? (
+                                    <>
+                                        <Plus className="w-3.5 h-3.5" />
+                                        Add to Project
+                                    </>
+                                ) : (
+                                    <>
+                                        <FolderPlus className="w-3.5 h-3.5" />
+                                        Create Project
+                                    </>
+                                )}
+                            </Button>
+                        </div>
                     )}
                 </div>
             </main>
@@ -701,7 +863,9 @@ function GenerateSpritePageContent() {
 export default function GenerateSpritePage() {
     return (
         <AuthGuard>
-            <GenerateSpritePageContent />
+            <Suspense fallback={<div className="h-screen flex items-center justify-center bg-background"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>}>
+                <GenerateSpritePageContent />
+            </Suspense>
         </AuthGuard>
     );
 }
