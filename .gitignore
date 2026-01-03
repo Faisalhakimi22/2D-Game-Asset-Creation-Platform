@@ -27,3 +27,14 @@ Thumbs.db
 # Build
 dist/
 build/
+
+# LaTeX build artifacts
+*.aux
+*.lof
+*.log
+*.lot
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
