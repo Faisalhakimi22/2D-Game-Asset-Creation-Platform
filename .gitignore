@@ -38,3 +38,6 @@ build/
 *.synctex.gz
 *.fls
 *.fdb_latexmk
+
+# Documentation folder
+docs/
